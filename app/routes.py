@@ -1,8 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form
+from jose import JWTError
 from sqlalchemy.orm import Session
 from app import models, schemas, utils, database, auth
-from app.auth import create_access_token, get_current_user
+from app.auth import ALGORITHM, SECRET_KEY, create_access_token, get_current_user
 from app.database import get_db
+from datetime import timedelta
+from jose import jwt
+
+
 
 router = APIRouter()
 
@@ -32,6 +37,39 @@ def login(
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
+@router.post("/forgot-password")
+def forgot_password(username: str = Form(...), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    token = create_access_token(data={"sub": user.username}, expires_delta=timedelta(minutes=15))
+    reset_link = f"http://localhost:8000/reset-password-form?token={token}"
+
+    return {"message": "Use this token to reset your password", "reset_token": token}
+
+
+@router.post("/reset-password")
+def reset_password(
+    token: str = Form(...),
+    new_password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]) # type: ignore
+        username = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=400, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.hashed_password = utils.hash_password(new_password)
+    db.commit()
+    return {"message": "Password reset successful"}  
 # Get all tasks for the current user
 @router.get("/tasks")
 def get_tasks(
